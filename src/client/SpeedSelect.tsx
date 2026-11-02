@@ -2,10 +2,10 @@
  * Codex Speed toggle: one small control in the composer's right tool row
  * (`conversation.input.right`), switching the session between standard routing
  * and the fast (priority) service tier — the Codex desktop app's Speed menu.
- * The choice is per session and lives in the node half (in-memory); this
- * component holds only viewing state. The control renders nothing until the
- * first load proves the session's current model is a codex model whose catalog
- * advertises the fast tier.
+ * The choice is per session; the node half also remembers the last explicit
+ * tier as fresh sessions' default. This component holds only viewing state.
+ * The control renders nothing until the first load proves the session's
+ * current model is a codex model whose catalog advertises the fast tier.
  *
  * Every color resolves through a `--dsw-alias-*` design token and every
  * user-visible string goes through the locale `t` of the
@@ -113,22 +113,16 @@ function fallbackTranslate(key: SubscriptionsKey): string {
 
 const TIERS: readonly SpeedTier[] = ['standard', 'fast']
 
-/**
- * The composer Speed control: a trigger reading `速度 · 快速`/`速度 · 标准`
- * that opens a two-row menu (standard/fast with descriptions, check mark on
- * the current tier). Mount and every open reload the host state so a model
- * switch made since the last open self-corrects.
- */
 /** How often the control re-reads the host state (model switches arrive only by asking). */
-const POLL_INTERVAL_MS = 3000
+const POLL_INTERVAL_MS = 1000
 
 /**
- * The composer Speed control: a trigger reading `速度 · 快速`/`速度 · 标准`
- * that opens a two-row menu (standard/fast with descriptions, check mark on
- * the current tier). The host pushes nothing on a model switch, so the
- * control re-reads on a slow poll with a single-flight guard; a failed read
- * keeps the last known state, so a transient RPC failure can never lock the
- * toggle away (the earlier mount-only load had no recovery path).
+ * The composer Speed control: a trigger showing the current tier (`标准` /
+ * `快速`) that opens a two-row menu (standard/fast with descriptions, check
+ * mark on the current tier). The host pushes nothing on a model switch, so the
+ * control re-reads on a one-second poll with a single-flight guard; a failed
+ * read keeps the last known state, so a transient RPC failure can never lock
+ * the toggle away (the earlier mount-only load had no recovery path).
  */
 export function SpeedSelect({ loadSpeed, setSpeed, t }: SpeedSelectProps) {
   const translate = t ?? fallbackTranslate
@@ -203,7 +197,10 @@ export function SpeedSelect({ loadSpeed, setSpeed, t }: SpeedSelectProps) {
     translate(tier === 'fast' ? 'speedFast' : 'speedStandard')
   const tierDescription = (tier: SpeedTier): string =>
     translate(tier === 'fast' ? 'speedFastDescription' : 'speedStandardDescription')
-  const triggerLabel = `${translate('speed')} · ${tierName(state.tier)}`
+  // The trigger shows only the tier; the Speed prefix stays in the accessible
+  // name and tooltip, where the bare word would otherwise lose its context.
+  const triggerLabel = tierName(state.tier)
+  const accessibleLabel = `${translate('speed')} · ${triggerLabel}`
 
   return (
     <div
@@ -244,7 +241,8 @@ export function SpeedSelect({ loadSpeed, setSpeed, t }: SpeedSelectProps) {
         style={styles.trigger}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={triggerLabel}
+        aria-label={accessibleLabel}
+        title={accessibleLabel}
         disabled={busy}
         onClick={() => {
           if (open) setOpen(false)
