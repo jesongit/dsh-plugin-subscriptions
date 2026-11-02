@@ -67,17 +67,17 @@ export type SpeedTier = 'standard' | 'fast'
 
 /** `speed` endpoint value: the session's choice plus the visibility list. */
 export interface SpeedState {
-  /** Explicit session speed, or the subagent's model default when supplied. */
+  /** Explicit session speed, else a classified subagent's model default, else the remembered tier. */
   tier: SpeedTier
   /** Codex model ids whose catalog advertises a fast tier. */
   fastModels: string[]
 }
 
-/** Session overrides plus persisted subagent model defaults. */
+/** Session overrides, the persisted remembered tier, and subagent model defaults. */
 export interface SpeedController {
   /** Pass the current Codex model to resolve a subagent's default speed. */
   speed(sessionId: string, model?: string): Promise<SpeedState>
-  /** Set one session's speed tier. */
+  /** Set one session's speed tier; the tier also becomes fresh sessions' remembered default. */
   setSpeed(sessionId: string, tier: SpeedTier): Promise<void>
 }
 

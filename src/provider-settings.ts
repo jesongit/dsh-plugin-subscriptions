@@ -47,6 +47,8 @@ interface ToolRevision {
 interface Document {
   providers: Partial<Record<ProviderId, ProviderPreferences>>
   toolHistory: ToolRevision[]
+  /** Codex only: the last explicit Speed tier, the default for fresh main sessions. */
+  sessionSpeed?: SubagentSpeedTier
 }
 
 export function validatePreferences(provider: ProviderId, input: unknown): ProviderPreferences {
@@ -170,6 +172,10 @@ export class ProviderSettingsStore {
         const tools = validatePreferences(revision.provider, { tools: revision.tools }).tools ?? {}
         return { at: revision.at, provider: revision.provider, tools }
       }).sort((a, b) => a.at - b.at)
+      if (raw.sessionSpeed !== undefined) {
+        if (raw.sessionSpeed !== 'standard' && raw.sessionSpeed !== 'fast') throw new Error('invalid session speed')
+        this.current.sessionSpeed = raw.sessionSpeed as SubagentSpeedTier
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`Cannot read provider settings at ${path}`, { cause: error })
     }
@@ -199,6 +205,25 @@ export class ProviderSettingsStore {
     return speeds && Object.hasOwn(speeds, model) ? speeds[model] : 'standard'
   }
 
+  /** The speed remembered from the last explicit Speed choice; fresh sessions start here. Read per request, so no clone. */
+  sessionSpeed(): SubagentSpeedTier {
+    return this.current.sessionSpeed ?? 'standard'
+  }
+
+  /**
+   * Persist the last explicit Speed tier as fresh sessions' default. Runs inside
+   * the serialized write queue and merges over the settled document, so a racing
+   * settings-page save is never clobbered (and never clobbers this field: it
+   * lives beside `toolHistory`, outside the per-provider round trip).
+   */
+  rememberSessionSpeed(tier: SubagentSpeedTier): Promise<void> {
+    return this.enqueue(async () => {
+      const next = structuredClone(this.current)
+      next.sessionSpeed = tier
+      await this.store(next)
+    })
+  }
+
   /** The Settings-page Claude cache TTL; undefined follows the plugin config. Read per request, so no clone. */
   promptCacheTtl(): PromptCacheTtlSetting | undefined {
     return this.current.providers.claude?.promptCacheTtl
@@ -216,24 +241,34 @@ export class ProviderSettingsStore {
 
   set(provider: ProviderId, input: unknown): Promise<void> {
     const preferences = validatePreferences(provider, input)
-    const run = this.writes.then(async () => {
+    return this.enqueue(() => {
       const next = structuredClone(this.current)
       const before = next.providers[provider]?.tools ?? {}
       next.providers[provider] = preferences
       if (PROVIDER_TOOLS[provider].some(tool => (before[tool] !== false) !== (preferences.tools?.[tool] !== false))) {
         next.toolHistory.push({ at: Date.now(), provider, tools: preferences.tools ?? {} })
       }
-      await mkdir(dirname(this.path), { recursive: true })
-      const temporary = `${this.path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
-      try {
-        await writeFile(temporary, JSON.stringify(next, null, 2), { mode: 0o600 })
-        await rename(temporary, this.path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
-      this.current = next
+      return this.store(next)
     })
+  }
+
+  /** Serialize one write behind the previous one; a failed write never blocks the queue. */
+  private enqueue(write: () => Promise<void>): Promise<void> {
+    const run = this.writes.then(write)
     this.writes = run.catch(() => undefined)
     return run
+  }
+
+  /** One atomic file replace, then publish. Caller builds the document and owns serialization. */
+  private async store(next: Document): Promise<void> {
+    await mkdir(dirname(this.path), { recursive: true })
+    const temporary = `${this.path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify(next, null, 2), { mode: 0o600 })
+      await rename(temporary, this.path)
+    } finally {
+      await rm(temporary, { force: true })
+    }
+    this.current = next
   }
 }

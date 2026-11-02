@@ -143,3 +143,36 @@ test('Codex subagent speed defaults persist independently and validate model key
     assert.throws(() => validatePreferences('claude', { subagentSpeeds: { m: 'fast' } }), /only for Codex/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+
+test('remembered session speed survives restarts, provider saves, and validates tiers', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'session-speed-'))
+  const path = join(dir, 'settings.json')
+  try {
+    const store = new ProviderSettingsStore(path)
+    assert.equal(store.sessionSpeed(), 'standard')
+    // Provider settings and the remembered tier stay independent in both directions.
+    await store.set('codex', { subagentSpeeds: { m: 'fast' }, visibleModels: ['m'] })
+    await store.rememberSessionSpeed('fast')
+    await store.rememberSessionSpeed('standard')
+    await store.rememberSessionSpeed('fast')
+    const restored = new ProviderSettingsStore(path)
+    assert.equal(restored.sessionSpeed(), 'fast')
+    assert.deepEqual(restored.get('codex'), { subagentSpeeds: { m: 'fast' }, visibleModels: ['m'] })
+    // A racing provider save and tier write converge either way: both writers
+    // merge over the settled document inside the queue, so the save lands
+    // (wholesale, per the set contract) and the tier rides on top of it.
+    await Promise.all([
+      restored.set('codex', { contextWindows: { m: 4096 } }),
+      restored.rememberSessionSpeed('standard'),
+    ])
+    const merged = new ProviderSettingsStore(path)
+    assert.equal(merged.sessionSpeed(), 'standard')
+    assert.deepEqual(merged.get('codex'), { contextWindows: { m: 4096 } })
+    // A corrupt remembered tier fails the whole document load, like the rest.
+    const { writeFile } = await import('node:fs/promises')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.sessionSpeed = 'ludicrous'
+    await writeFile(path, JSON.stringify(raw))
+    assert.throws(() => new ProviderSettingsStore(path), /Cannot read provider settings/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

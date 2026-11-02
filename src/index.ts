@@ -793,9 +793,11 @@ export function apply(ctx: Context, config: Config): void {
   // Usage lookups resolve the session through the refresh-aware path, so an
   // expired access token renews instead of failing the lookup.
   const usageFetchers: UsageFetchers = {}
-  // Explicit Speed choices are per-session and reset on restart. Subagents
-  // without an explicit choice use their persisted model default. Every
-  // request still gates Fast on the model's discovered capability.
+  // Explicit Speed choices are per-session; the last explicit tier is also
+  // remembered (persisted) and becomes fresh sessions' default, surviving
+  // restarts. Classified subagents without an explicit choice keep their
+  // persisted per-model default, so a main-session choice never propagates
+  // down. Every request still gates Fast on the model's capability.
   const speedBySession = new Map<string, SpeedTier>()
   const selectedSpeed = (sessionId: string, model?: string): SpeedTier => {
     const explicit = speedBySession.get(sessionId)
@@ -806,7 +808,9 @@ export function apply(ctx: Context, config: Config): void {
     if (model !== undefined && agent?.session.header.origin === 'subagent') {
       return preferences.subagentSpeed(parseAccountModelId(model)?.model ?? model)
     }
-    return 'standard'
+    // Main conversations and hosts without origin metadata follow the
+    // remembered tier; Fast still needs the model's discovered capability.
+    return preferences.sessionSpeed()
   }
   let codexAdapter: CodexAdapter | undefined
   // Dropped on every copilot auth transition so replay state (captured
@@ -1147,7 +1151,12 @@ export function apply(ctx: Context, config: Config): void {
       }
     },
     async setSpeed(sessionId, tier) {
-      // Keep explicit Standard too: a child can override a saved Fast default.
+      // Persist first, then take the session override: a failed write rejects
+      // the RPC with the session untouched, so the reported outcome and the
+      // effective tier never diverge. Either tier becomes the remembered
+      // default for fresh sessions; a child explicitly overriding a saved
+      // default re-records its choice, same as a main session.
+      await preferences.rememberSessionSpeed(tier)
       speedBySession.set(sessionId, tier)
     },
   }

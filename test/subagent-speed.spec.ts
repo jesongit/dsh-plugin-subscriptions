@@ -82,6 +82,7 @@ test('main speed and per-model subagent defaults stay independent through RPC, r
       accessToken: `synthetic-${account}`, refreshToken: 'synthetic-refresh', accountId: account, expiresAt: Date.now() + 86400000,
     })
     host = await mount()
+    await host.stream('parent', undefined) // nothing remembered yet: fresh sessions start standard
     await host.setSpeed('parent', 'fast')
     await host.stream('parent', 'priority')
     await host.stream('child', undefined, 'fast-model')
@@ -120,9 +121,25 @@ test('main speed and per-model subagent defaults stay independent through RPC, r
     supportsFast = true
     host = await mount(false)
     await host.call('providerSettings', { provider: 'codex', force: true })
-    await host.stream('child', undefined) // minimal host cannot classify a child
+    await host.stream('child', undefined) // minimal host cannot classify a child: remembered tier (standard here)
     await host.setSpeed('child', 'fast')
     await host.stream('child', 'priority') // existing explicit speed still works
+    // The remembered tier from that last explicit choice now drives fresh
+    // sessions — across restarts and without a registry — while a settings
+    // save cannot clobber it and classified children keep their own defaults.
+    await host.runtime.dispose()
+    host = await mount(true, true)
+    await host.setDefaults('standard')
+    await host.stream('parent', 'priority')
+    await host.stream('unknown', 'priority')
+    await host.stream('child', undefined)
+    await host.setDefaults('fast')
+    await host.stream('child', 'priority')
+    supportsFast = false
+    await host.call('providerSettings', { provider: 'codex', force: true })
+    await host.stream('parent', undefined) // the remembered tier still gates on current capability
+    await host.stream('child', undefined)
+    supportsFast = true
   } finally {
     await host?.runtime.dispose()
     if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous
