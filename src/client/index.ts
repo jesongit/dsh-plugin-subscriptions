@@ -35,6 +35,7 @@ import type { SubscriptionUsageBadgeInjected } from './SubscriptionUsageBadge.js
 import { en, zh } from './locales.js'
 import type { SubscriptionsKey } from './locales.js'
 import { fastCommandDescription } from './fast-command.js'
+import { swapSubscriptionsNavIcon } from './nav-icon.js'
 
 export type { SubscriptionsSectionInjected, SubscriptionsSectionProps } from './SubscriptionsSection.js'
 export type { ImageGenerateToolviewInjected, ImageGenerateToolviewProps } from './ImageGenerateToolview.js'
@@ -79,6 +80,32 @@ export function apply(ctx: ClientContext): void {
     document.head.appendChild(style)
     return () => style.remove()
   }, 'dsh-plugin-subscriptions: settings panel breathing room')
+  // The host's settings nav maps section ids to glyphs and falls back to the
+  // settings gear for unknown ids — subscriptions has no entry, so the nav
+  // showed the gear. The dialog is body-portaled, so a body-wide observer
+  // schedules a scoped swap (labeled cell, see nav-icon.ts) whenever it
+  // appears; mismatches degrade to leaving the gear untouched.
+  ctx.effect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let scheduled = false
+    const run = (): void => {
+      scheduled = false
+      const dialog = document.querySelector<HTMLDivElement>('div[role="dialog"][aria-modal="true"]:has(> nav)')
+      if (dialog) swapSubscriptionsNavIcon(dialog, document, t('nav'))
+    }
+    const schedule = (): void => {
+      if (scheduled) return
+      scheduled = true
+      timer = setTimeout(run, 50)
+    }
+    const observer = new MutationObserver(schedule)
+    observer.observe(document.body, { childList: true, subtree: true })
+    schedule()
+    return () => {
+      observer.disconnect()
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, 'dsh-plugin-subscriptions: settings nav glyph')
   // The shell's Context merge types `connection` as the host handle; in the
   // browser shell the same key holds the full client ConnectionHandle.
   const connection = ctx.get('connection') as unknown as ConnectionHandle
